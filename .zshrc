@@ -92,28 +92,67 @@ alias sshc='sshpass -f ~/.ssh/scripts/.com ssh -l "${ODEAL_MAIL_USER:?set ODEAL_
 # ============================================================================
 # Functions — git
 # ============================================================================
+# gitp -m "mesaj"  |  gitp "mesaj"
+# pull --rebase -> stage -> commit -> push, ilk hatada durur
 gitp() {
-    if [[ $1 != "-m" || -z $2 ]]; then
-        echo "Kullanım: gitp -m \"commit mesajınız\""
+    emulate -L zsh
+
+    local msg="$1"
+    [[ "$1" == "-m" ]] && msg="$2"
+
+    if [[ -z "$msg" ]]; then
+        print -u2 'kullanim: gitp [-m] "commit mesaji"'
         return 1
     fi
 
-    local commit_message="$2"
+    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+        print -u2 'gitp: git deposu degil'
+        return 1
+    fi
 
-    echo "🔄 Git pull yapılıyor..."
-    git pull || { echo "❌ Git pull başarısız!"; return 1; }
+    local branch
+    branch=$(git branch --show-current)
+    if [[ -z "$branch" ]]; then
+        print -u2 'gitp: detached HEAD, once bir dala gec'
+        return 1
+    fi
 
-    echo "🔄 Git add yapılıyor..."
-    git add . || { echo "❌ Git add başarısız!"; return 1; }
-    echo "✅ Git add tamamlandı"
+    local step=$'\e[34m::\e[0m' ok=$'\e[32mok\e[0m' bad=$'\e[31m!!\e[0m'
 
-    echo "🔄 Commit yapılıyor: $commit_message"
-    git commit -m "$commit_message" || { echo "❌ Commit başarısız!"; return 1; }
-    echo "✅ Commit tamamlandı"
+    # upstream gercekten var mi (bos remote'ta branch.*.merge set olsa bile ref yok)
+    local has_upstream=0
+    git rev-parse --verify -q '@{upstream}' >/dev/null 2>&1 && has_upstream=1
 
-    echo "🔄 Push yapılıyor..."
-    git push || { echo "❌ Push başarısız!"; return 1; }
-    echo "✅ Push tamamlandı! 🚀"
+    if (( has_upstream )); then
+        print -- "$step pull --rebase ($branch)"
+        if ! git pull --rebase --autostash; then
+            print -u2 -- "$bad pull basarisiz, calisma agaci oldugu gibi birakildi"
+            return 1
+        fi
+    else
+        print -- "$step upstream yok, pull atlandi ($branch)"
+    fi
+
+    print -- "$step stage"
+    git add -A || { print -u2 -- "$bad add basarisiz"; return 1; }
+
+    if git diff --cached --quiet; then
+        print -- "$ok commit edilecek degisiklik yok"
+        return 0
+    fi
+    git diff --cached --stat | sed 's/^/   /'
+
+    print -- "$step commit"
+    git commit -q -m "$msg" || { print -u2 -- "$bad commit basarisiz"; return 1; }
+
+    print -- "$step push"
+    if (( has_upstream )); then
+        git push -q || { print -u2 -- "$bad push basarisiz"; return 1; }
+    else
+        git push -q -u origin "$branch" || { print -u2 -- "$bad push basarisiz"; return 1; }
+    fi
+
+    print -- "$ok $(git rev-parse --short HEAD) $branch"
 }
 
 # ============================================================================
